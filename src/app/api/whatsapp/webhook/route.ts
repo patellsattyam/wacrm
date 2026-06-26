@@ -38,6 +38,8 @@ interface WhatsAppMessage {
   sticker?: { id: string; mime_type: string }
   location?: { latitude: number; longitude: number; name?: string; address?: string }
   reaction?: { message_id: string; emoji: string }
+  /** Added to support template quick-reply button clicks */
+  button?: { text: string; payload: string }
   /**
    * Set when the customer taps a button or list row on an interactive
    * message we sent. `button_reply.id` / `list_reply.id` is whatever id
@@ -306,9 +308,9 @@ function ladderLevel(s: string): number {
 
 /**
  * Can a recipient transition from `current` to `incoming`?
- *   - Along the ladder, only forward moves are allowed.
- *   - `failed` is accepted only from `pending` or `sent`; it's refused
- *     once the recipient has reached any of the success states.
+ * - Along the ladder, only forward moves are allowed.
+ * - `failed` is accepted only from `pending` or `sent`; it's refused
+ * once the recipient has reached any of the success states.
  */
 function isValidStatusTransition(current: string, incoming: string): boolean {
   if (incoming === 'failed') {
@@ -562,8 +564,8 @@ async function processMessage(
 
   // Insert message — field names MUST match the messages table schema
   // (see supabase/migrations/001_initial_schema.sql):
-  //   conversation_id, sender_type, content_type, content_text,
-  //   media_url, template_name, message_id, status, created_at
+  //    conversation_id, sender_type, content_type, content_text,
+  //    media_url, template_name, message_id, status, created_at
   // `mediaType` is intentionally unused — the schema has no media_type
   // column; the MIME type is only used to construct the proxy URL during
   // parseMessageContent. Silence the unused-var warning:
@@ -571,7 +573,7 @@ async function processMessage(
 
   // The messages.content_type CHECK constraint (widened in migration 010
   // to add 'interactive' for button/list taps) allows:
-  //   text, image, document, audio, video, location, template, interactive
+  //    text, image, document, audio, video, location, template, interactive
   // Map incoming WhatsApp types that aren't in that list to the closest
   // allowed value so the INSERT doesn't fail with a constraint error.
   const ALLOWED_CONTENT_TYPES = new Set([
@@ -582,7 +584,7 @@ async function processMessage(
     ? message.type
     : message.type === 'sticker'
       ? 'image'   // stickers are images
-      : 'text'    // reaction, unknown → text fallback
+      : 'text'    // reaction, button, unknown → text fallback
 
   // Determine whether this is the contact's very first inbound message
   // BEFORE we insert, so the count is accurate. Covers the case where
@@ -833,6 +835,17 @@ async function parseMessageContent(
     case 'reaction':
       return { ...empty, contentText: message.reaction?.emoji || null }
 
+    case 'button':
+      // Captures standard template quick-reply buttons where type is 'button'
+      if (message.button) {
+        return {
+          ...empty,
+          contentText: message.button.text,
+          interactiveReplyId: message.button.payload || null,
+        }
+      }
+      return { ...empty, contentText: '[Button reply]' }
+
     case 'interactive': {
       // The customer tapped a reply button or a list row on a message
       // we previously sent. Meta delivers `interactive.button_reply` for
@@ -866,7 +879,7 @@ type ContactRow = any
 interface ContactOutcome {
   contact: ContactRow
   /** True when this call created the row; drives new_contact_created
-   *  automation dispatch in processMessage. */
+   * automation dispatch in processMessage. */
   wasCreated: boolean
 }
 
